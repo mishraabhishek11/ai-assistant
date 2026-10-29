@@ -9,7 +9,8 @@ A command-line chat assistant built on the OpenAI-compatible chat completions AP
 - Multi-turn conversation: the full message history is sent on every request
 - Works with any OpenAI-compatible provider via `BASE_URL`, `API_KEY` and `MODEL`
 - Type `quit` to end the session
-- Small utility module (`tools.py`) with helpers for time, dice, password generation and file reading (not yet connected to the chat loop, see [Known Issues](#known-issues))
+- Simple tool planner (`planner.py`): before each reply, an LLM call picks one of the tools in `tools.py` (current time, dice roll, password) or `none`, and the chosen tool's result is passed to the model to phrase the answer
+- Utility module (`tools.py`) with helpers for time, dice, password generation and file reading (`read_text_file` is not yet exposed to the planner)
 
 ## Tech Stack
 
@@ -21,7 +22,8 @@ A command-line chat assistant built on the OpenAI-compatible chat completions AP
 
 ```
 ai-assistant/
-├── assistant.py        # Entry point: persona menu and chat loop
+├── assistant.py        # Entry point: persona menu, tool dispatch and chat loop
+├── planner.py          # choose_tool(): LLM-based tool selection
 ├── assistant_role.py   # Persona prompts and get_role_prompt()
 ├── tools.py            # Helper functions (time, dice, password, read file)
 ├── .env                # Local configuration (not committed)
@@ -87,6 +89,9 @@ Enter your choice : 2
 You : What is a list comprehension?
 AI  : ...
 
+You : Roll a dice
+AI  : You rolled a 4.
+
 You : quit
 AI  : Goodbye! Have a great day.
 ```
@@ -115,6 +120,17 @@ To add a persona, add an entry to `roles` in `assistant_role.py` and a matching 
 
 Keep `.env` out of version control.
 
+## Tool Planner
+
+Each turn works in two steps:
+
+1. `choose_tool(user_input)` in `planner.py` sends the request to the model with a planner prompt and gets back a single tool name (`get_current_time`, `roll_dice`, `generate_password`) or `none`.
+2. `assistant.py` runs the matching function from `tools.py` and sends the user's question plus the tool result to the model, which answers in the chosen persona. With `none`, the model answers on its own.
+
+This is prompt-based routing, not OpenAI function calling. It costs one extra API call per message, and tools run with default arguments (for example, a password is always 12 characters).
+
+To add a tool, write the function in `tools.py`, describe it in the planner prompt in `planner.py`, and add a branch for it in `assistant.py`.
+
 ## Utility Functions
 
 Defined in `tools.py`:
@@ -128,7 +144,10 @@ Defined in `tools.py`:
 
 ## Known Issues
 
-- The functions in `tools.py` are imported by `assistant.py` but never called, and they are not registered as model tools (function calling), so the assistant cannot use them yet.
+- Tool selection relies on the model returning an exact tool name; extra text or a different casing is treated as no tool and falls through to a plain answer.
+- The planner cannot pass arguments (such as a password length), and `read_text_file` is not wired in.
+- The user message stored in the history is the wrapped prompt containing the tool result, not the raw input, and the wrapper text is repeated every turn.
+- Each message makes two API calls (planner, then answer).
 - API errors (bad key, network failure, wrong model name) are not caught and will end the program with a traceback.
 - The conversation history grows without limit, so very long sessions may exceed the model's context window.
 - `read_text_file` opens files without an explicit encoding and its generic `except Exception` returns the error as normal text.
@@ -136,7 +155,7 @@ Defined in `tools.py`:
 
 ## Future Enhancements
 
-- Wire `tools.py` into the chat loop using function calling
+- Replace the prompt-based planner with native function calling (with arguments and `read_text_file`)
 - Handle API errors and retry with a clear message
 - Trim or summarise old messages to stay within the context window
 - Streaming responses
